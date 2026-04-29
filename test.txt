@@ -1,18 +1,231 @@
-$folder1 = "D:\FolderA"
-$folder2 = "D:\FolderB"
 
-# 获取两个文件夹的所有文件递归列表
-$files1 = Get-ChildItem -Path $folder1 -Recurse -File | Select-Object FullName, Length, LastWriteTime, @{Name="RelativePath";Expression={$_.FullName.Substring($folder1.Length)}}
-$files2 = Get-ChildItem -Path $folder2 -Recurse -File | Select-Object FullName, Length, LastWriteTime, @{Name="RelativePath";Expression={$_.FullName.Substring($folder2.Length)}}
+Option Explicit
 
-# 比较对象
-$diff = Compare-Object -ReferenceObject $files1 -DifferenceObject $files2 -Property RelativePath, Length, LastWriteTime -PassThru
+' 主过程：选择文件夹并处理CSV文件
+Sub ImportWinMergeCSV()
+    Dim folderPath As String
+    Dim csvFilePath As String
+    Dim wsResult As Worksheet
+    Dim fileContent As String
+    Dim lines() As String
+    Dim i As Long, j As Long
+    Dim dataArr() As Variant
+    Dim resultArr() As Variant
+    Dim rowCount As Long
+    Dim colCount As Long
+    
+    ' 1. 获取文件夹路径
+    folderPath = GetFolderPath()
+    If folderPath = "" Then Exit Sub
+    
+    ' 2. 查找文件夹下的第一个CSV文件 (可根据需求修改为遍历所有CSV)
+    csvFilePath = Dir(folderPath & "*.csv")
+    If csvFilePath = "" Then
+        MsgBox "在所选文件夹中未找到CSV文件。", vbExclamation
+        Exit Sub
+    End If
+    csvFilePath = folderPath & csvFilePath
+    
+    ' 3. 读取CSV文件内容
+    fileContent = ReadFile(csvFilePath)
+    If fileContent = "" Then
+        MsgBox "文件读取失败或为空。", vbCritical
+        Exit Sub
+    End If
+    
+    ' 4. 解析CSV数据
+    ' 按换行符分割
+    lines = Split(fileContent, vbCrLf)
+    
+    ' 过滤空行，计算有效行数
+    Dim validLines As Collection
+    Set validLines = New Collection
+    Dim line As Variant
+    For Each line In lines
+        If Trim(line) <> "" Then
+            validLines.Add line
+        End If
+    Next line
+    
+    If validLines.Count < 4 Then
+        MsgBox "CSV文件格式不符合要求（至少需要4行）。", vbExclamation
+        Exit Sub
+    End If
+    
+    ' 确定列数：解析第四行（数据行）来确定列数，假设所有数据行列数一致
+    ' 注意：简单的Split(",")无法处理包含逗号的引用字段，这里使用简易解析，
+    ' 对于WinMerge导出通常较为规范，若含复杂引号需更复杂的解析器。
+    ' 此处为了通用性，先解析第一行数据确定列宽
+    Dim firstDataLine As String
+    firstDataLine = validLines.Item(4) ' 第4行是第一条数据
+    colCount = CountCSVColumns(firstDataLine)
+    
+    rowCount = validLines.Count - 3 ' 减去前3行头信息
+    
+    ' 5. 准备结果数组
+    ' 结果表结构：
+    ' Row 1: CSV Line 1 (Folder info)
+    ' Row 2: CSV Line 2 (Date)
+    ' Row 3+: No. | Title (from CSV Line 3 headers?) | Data...
+    ' 题目要求：第三行开始标题第一列添加No.，作为结果表格。
+    ' 理解：
+    ' Excel Row 1 <- CSV Line 1
+    ' Excel Row 2 <- CSV Line 2
+    ' Excel Row 3 (Header): "No." + CSV Line 3的内容
+    ' Excel Row 4+ (Data): Index + CSV Line 4+的内容
+    
+    ReDim resultArr(1 To rowCount + 3, 1 To colCount + 1)
+    
+    ' 填充第1行
+    Dim cols1() As String
+    cols1 = SplitCSVLine(validLines.Item(1), colCount)
+    For j = 1 To UBound(cols1) + 1
+        If j <= colCount + 1 Then resultArr(1, j) = cols1(j - 1)
+    Next j
+    
+    ' 填充第2行
+    Dim cols2() As String
+    cols2 = SplitCSVLine(validLines.Item(2), colCount)
+    For j = 1 To UBound(cols2) + 1
+        If j <= colCount + 1 Then resultArr(2, j) = cols2(j - 1)
+    Next j
+    
+    ' 填充第3行 (标题行)
+    resultArr(3, 1) = "No."
+    Dim cols3() As String
+    cols3 = SplitCSVLine(validLines.Item(3), colCount)
+    For j = 1 To UBound(cols3) + 1
+        If j <= colCount Then resultArr(3, j + 1) = cols3(j - 1)
+    Next j
+    
+    ' 填充数据行 (从第4行开始)
+    Dim dataIndex As Long
+    dataIndex = 0
+    For i = 4 To validLines.Count
+        dataIndex = dataIndex + 1
+        resultArr(dataIndex + 3, 1) = dataIndex ' No. 列
+        
+        Dim dataCols() As String
+        dataCols = SplitCSVLine(validLines.Item(i), colCount)
+        For j = 1 To UBound(dataCols) + 1
+            If j <= colCount Then resultArr(dataIndex + 3, j + 1) = dataCols(j - 1)
+        Next j
+    Next i
+    
+    ' 6. 写入新的Sheet
+    Set wsResult = ThisWorkbook.Sheets.Add
+    wsResult.Name = "WinMerge_Result_" & Format(Now, "yyyymmdd_hhmmss")
+    
+    ' 将数组写入单元格
+    wsResult.Range("A1").Resize(UBound(resultArr, 1), UBound(resultArr, 2)).Value = resultArr
+    
+    ' 格式美化
+    With wsResult
+        .Rows(1).Font.Bold = True
+        .Rows(2).Font.Italic = True
+        .Rows(3).Font.Bold = True
+        .Rows(3).Interior.Color = RGB(200, 200, 200)
+        .Columns.AutoFit
+    End With
+    
+    MsgBox "数据导入成功！", vbInformation
+End Sub
 
-# 输出结果
-$diff | ForEach-Object {
-    if ($_.SideIndicator -eq "=>") {
-        Write-Host "【新增/修改】在 FolderB 中: $($_.RelativePath)" -ForegroundColor Green
-    } elseif ($_.SideIndicator -eq "<=") {
-        Write-Host "【删除/独有】在 FolderA 中: $($_.RelativePath)" -ForegroundColor Red
-    }
-}
+' 辅助函数：弹出文件夹选择对话框
+Function GetFolderPath() As String
+    Dim fd As FileDialog
+    Set fd = Application.FileDialog(msoFileDialogFolderPicker)
+    With fd
+        .Title = "请选择包含WinMerge CSV文件的文件夹"
+        .InitialFileName = Application.DefaultFilePath
+        If .Show = -1 Then
+            GetFolderPath = .SelectedItems(1) & "\"
+        Else
+            GetFolderPath = ""
+        End If
+    End With
+    Set fd = Nothing
+End Function
+
+' 辅助函数：读取文本文件内容
+Function ReadFile(filePath As String) As String
+    Dim fso As Object
+    Dim ts As Object
+    Dim content As String
+    
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(filePath) Then
+        ReadFile = ""
+        Exit Function
+    End If
+    
+    Set ts = fso.OpenTextFile(filePath, 1, False, -2) ' -2 for System Default
+    content = ts.ReadAll
+    ts.Close
+    
+    Set ts = Nothing
+    Set fso = Nothing
+    
+    ReadFile = content
+End Function
+
+' 辅助函数：简单计算CSV列数 (基于逗号数量，仅供参考，实际解析在SplitCSVLine)
+Function CountCSVColumns(line As String) As Long
+    Dim parts() As String
+    parts = SplitCSVLine(line, 0) ' 0 indicates we just want to count or parse dynamically
+    CountCSVColumns = UBound(parts) + 1
+End Function
+
+' 辅助函数：解析CSV单行，处理基本的引号包裹情况
+' 注意：这是一个简化的CSV解析器，适用于大多数标准导出。
+' 如果字段内部包含换行符或复杂的嵌套引号，可能需要更强大的解析逻辑。
+Function SplitCSVLine(line As String, expectedCols As Long) As String()
+    Dim result() As String
+    Dim i As Long
+    Dim char As String
+    Dim currentField As String
+    Dim inQuotes As Boolean
+    Dim fieldCount As Long
+    
+    ' 初始化
+    ReDim result(0 To 0)
+    currentField = ""
+    inQuotes = False
+    fieldCount = 0
+    
+    For i = 1 To Len(line)
+        char = Mid(line, i, 1)
+        
+        If inQuotes Then
+            If char = """" Then
+                ' 检查是否是双引号转义 ""
+                If i < Len(line) And Mid(line, i + 1, 1) = """" Then
+                    currentField = currentField & """"
+                    i = i + 1 ' 跳过下一个引号
+                Else
+                    inQuotes = False
+                End If
+            Else
+                currentField = currentField & char
+            End If
+        Else
+            If char = """" Then
+                inQuotes = True
+            ElseIf char = "," Then
+                ' 结束当前字段
+                ReDim Preserve result(0 To fieldCount)
+                result(fieldCount) = currentField
+                fieldCount = fieldCount + 1
+                currentField = ""
+            Else
+                currentField = currentField & char
+            End If
+        End If
+    Next i
+    
+    ' 添加最后一个字段
+    ReDim Preserve result(0 To fieldCount)
+    result(fieldCount) = currentField
+    
+    SplitCSVLine = result
+End Function
