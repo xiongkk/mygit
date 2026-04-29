@@ -1,49 +1,18 @@
-#!/bin/bash
+$folder1 = "D:\FolderA"
+$folder2 = "D:\FolderB"
 
-echo "===== システムハードウェア情報 ====="
-echo
+# 获取两个文件夹的所有文件递归列表
+$files1 = Get-ChildItem -Path $folder1 -Recurse -File | Select-Object FullName, Length, LastWriteTime, @{Name="RelativePath";Expression={$_.FullName.Substring($folder1.Length)}}
+$files2 = Get-ChildItem -Path $folder2 -Recurse -File | Select-Object FullName, Length, LastWriteTime, @{Name="RelativePath";Expression={$_.FullName.Substring($folder2.Length)}}
 
-# システム情報
-echo "【システム情報】"
-grep -E "NAME|VERSION" /etc/os-release | head -2
-echo "カーネルバージョン: $(uname -r)"
-echo "ホスト名: $(hostname)"
-echo
+# 比较对象
+$diff = Compare-Object -ReferenceObject $files1 -DifferenceObject $files2 -Property RelativePath, Length, LastWriteTime -PassThru
 
-# CPU
-echo "【CPU】"
-echo "モデル: $(grep 'model name' /proc/cpuinfo | head -1 | awk -F: '{print $2}' | sed -e 's/^ *//')"
-echo "物理CPU数: $(grep 'physical id' /proc/cpuinfo | sort -u | wc -l)"
-echo "物理コア数: $(grep 'cpu cores' /proc/cpuinfo | head -1 | awk -F: '{print $2}' | sed -e 's/^ *//')"
-echo "論理CPU数（スレッド）: $(grep -c 'processor' /proc/cpuinfo)"
-echo
-
-# メモリ
-echo "【メモリ】"
-free -h | awk '/Mem/{print "合計: " $2, " 空き: " $NF}'
-echo
-
-# ディスク
-echo "【ディスク】"
-lsblk -d -o NAME,SIZE,TYPE,MODEL | grep disk
-echo
-
-# パーティション使用状況
-echo "【パーティション使用状況】"
-df -h -x tmpfs -x devtmpfs | awk 'NR==1 || /^\/dev/'
-echo
-
-# ネットワーク
-echo "【ネットワークインターフェース】"
-ip -br addr show | grep -v LOOPBACK
-echo
-
-# マザーボード・BIOS（root のみ）
-if [ $UID -eq 0 ]; then
-  echo "【マザーボード・BIOS情報】"
-  dmidecode -t system | grep -E "Manufacturer|Product Name|Serial Number" | head -5
-  dmidecode -t bios | grep -E "Vendor|Version|Release Date" | head -3
-  echo
-fi
-
-echo "===== 情報取得完了 ====="
+# 输出结果
+$diff | ForEach-Object {
+    if ($_.SideIndicator -eq "=>") {
+        Write-Host "【新增/修改】在 FolderB 中: $($_.RelativePath)" -ForegroundColor Green
+    } elseif ($_.SideIndicator -eq "<=") {
+        Write-Host "【删除/独有】在 FolderA 中: $($_.RelativePath)" -ForegroundColor Red
+    }
+}
