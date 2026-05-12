@@ -1,1 +1,7 @@
-Get-ChildItem -Recurse | Select-Object Name, Length, LastWriteTime, @{Name="Type";Expression={if($_.PSIsContainer){"文件夹"}else{"文件"}}} | Export-Csv -Path "文件清单.csv" -NoTypeInformation
+$folder = "D:\COBOL\src"
+
+Get-ChildItem -Path $folder -File -Include *.cbl,*.cpy | ForEach-Object {
+    $content = Get-Content $_.FullName -Raw
+    $newContent = $content -replace '(?m)^.{6}', ''
+    Set-Content $_.FullName $newContent -Encoding Default
+}
