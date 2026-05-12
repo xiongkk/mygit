@@ -1,7 +1,94 @@
-$folder = "D:\COBOL\src"
+# COBOLファイルの先頭6桁シーケンス番号を一括削除
+# サブフォルダを含む再帰処理に対応
 
-Get-ChildItem -Path $folder -File -Include *.cbl,*.cpy | ForEach-Object {
-    $content = Get-Content $_.FullName -Raw
-    $newContent = $content -replace '(?m)^.{6}', ''
-    Set-Content $_.FullName $newContent -Encoding Default
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$FolderPath,
+
+    [string[]]$Extensions = @("*.cbl", "*.cob", "*.cobol", "*.cpy"),
+
+    [switch]$Backup,
+    [switch]$WhatIf
+)
+
+# パスの存在確認
+if (-not (Test-Path $FolderPath)) {
+    Write-Error "指定されたパスが存在しません: $FolderPath"
+    exit 1
+}
+
+# 処理カウンター初期化
+$totalFiles = 0
+$processedFiles = 0
+$skippedFiles = 0
+
+# 対象ファイルを再帰的に取得
+$files = Get-ChildItem -Path $FolderPath -Recurse -Include $Extensions
+
+if ($files.Count -eq 0) {
+    Write-Warning "COBOLファイルが見つかりませんでした（拡張子: $($Extensions -join ', ')）"
+    exit 0
+}
+
+Write-Host "$($files.Count) 件のファイルを検出しました。処理を開始します..." -ForegroundColor Cyan
+
+foreach ($file in $files) {
+    $totalFiles++
+
+    try {
+        # 元のエンコードを維持しながら全行を読み込む
+        $lines = [System.IO.File]::ReadAllLines($file.FullName, [System.Text.Encoding]::Default)
+
+        $newLines = @()
+        $hasSequenceNumbers = $false
+
+        foreach ($line in $lines) {
+            # 先頭6文字が数字かどうか確認（COBOLシーケンス番号列の判定）
+            if ($line.Length -ge 6 -and $line.Substring(0, 6) -match '^\d{6}') {
+                $hasSequenceNumbers = $true
+                # 先頭6桁を削除し、7桁目以降を保持
+                $newLines += $line.Substring(6)
+            } else {
+                # シーケンス番号なしの行はそのまま保持
+                $newLines += $line
+            }
+        }
+
+        if (-not $hasSequenceNumbers) {
+            Write-Host "  [スキップ] $($file.FullName)（シーケンス番号が検出されませんでした）" -ForegroundColor Gray
+            $skippedFiles++
+            continue
+        }
+
+        if ($WhatIf) {
+            # シミュレーションモード：実際には変更しない
+            Write-Host "  [シミュレーション] 処理対象: $($file.FullName)" -ForegroundColor Yellow
+        } else {
+            # バックアップオプションが有効な場合、元ファイルを保存
+            if ($Backup) {
+                $backupPath = "$($file.FullName).bak"
+                Copy-Item -Path $file.FullName -Destination $backupPath -Force
+            }
+
+            # 処理結果をファイルに書き戻す
+            [System.IO.File]::WriteAllLines($file.FullName, $newLines, [System.Text.Encoding]::Default)
+            Write-Host "  [完了] $($file.FullName)" -ForegroundColor Green
+        }
+
+        $processedFiles++
+
+    } catch {
+        Write-Host "  [エラー] $($file.FullName): $_" -ForegroundColor Red
+    }
+}
+
+# 処理結果のサマリーを表示
+Write-Host ""
+Write-Host "==============================" -ForegroundColor Cyan
+Write-Host "処理が完了しました！" -ForegroundColor Cyan
+Write-Host "  スキャン済み: $totalFiles"
+Write-Host "  処理済み:     $processedFiles" -ForegroundColor Green
+Write-Host "  スキップ済み: $skippedFiles"   -ForegroundColor Gray
+if ($WhatIf) {
+    Write-Host "※ シミュレーションモードのため、ファイルは変更されていません" -ForegroundColor Yellow
 }
