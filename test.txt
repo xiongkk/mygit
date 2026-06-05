@@ -1,94 +1,71 @@
-# COBOLファイルの先頭6桁シーケンス番号を一括削除
-# サブフォルダを含む再帰処理に対応
-
-param(
-    [Parameter(Mandatory=$true)]
-    [string]$FolderPath,
-
-    [string[]]$Extensions = @("*.cbl", "*.cob", "*.cobol", "*.cpy"),
-
-    [switch]$Backup,
-    [switch]$WhatIf
-)
-
-# パスの存在確認
-if (-not (Test-Path $FolderPath)) {
-    Write-Error "指定されたパスが存在しません: $FolderPath"
-    exit 1
-}
-
-# 処理カウンター初期化
-$totalFiles = 0
-$processedFiles = 0
-$skippedFiles = 0
-
-# 対象ファイルを再帰的に取得
-$files = Get-ChildItem -Path $FolderPath -Recurse -Include $Extensions
-
-if ($files.Count -eq 0) {
-    Write-Warning "COBOLファイルが見つかりませんでした（拡張子: $($Extensions -join ', ')）"
-    exit 0
-}
-
-Write-Host "$($files.Count) 件のファイルを検出しました。処理を開始します..." -ForegroundColor Cyan
-
-foreach ($file in $files) {
-    $totalFiles++
-
-    try {
-        # 元のエンコードを維持しながら全行を読み込む
-        $lines = [System.IO.File]::ReadAllLines($file.FullName, [System.Text.Encoding]::Default)
-
-        $newLines = @()
-        $hasSequenceNumbers = $false
-
-        foreach ($line in $lines) {
-            # 先頭6文字が数字かどうか確認（COBOLシーケンス番号列の判定）
-            if ($line.Length -ge 6 -and $line.Substring(0, 6) -match '^\d{6}') {
-                $hasSequenceNumbers = $true
-                # 先頭6桁を削除し、7桁目以降を保持
-                $newLines += $line.Substring(6)
-            } else {
-                # シーケンス番号なしの行はそのまま保持
-                $newLines += $line
-            }
-        }
-
-        if (-not $hasSequenceNumbers) {
-            Write-Host "  [スキップ] $($file.FullName)（シーケンス番号が検出されませんでした）" -ForegroundColor Gray
-            $skippedFiles++
-            continue
-        }
-
-        if ($WhatIf) {
-            # シミュレーションモード：実際には変更しない
-            Write-Host "  [シミュレーション] 処理対象: $($file.FullName)" -ForegroundColor Yellow
-        } else {
-            # バックアップオプションが有効な場合、元ファイルを保存
-            if ($Backup) {
-                $backupPath = "$($file.FullName).bak"
-                Copy-Item -Path $file.FullName -Destination $backupPath -Force
-            }
-
-            # 処理結果をファイルに書き戻す
-            [System.IO.File]::WriteAllLines($file.FullName, $newLines, [System.Text.Encoding]::Default)
-            Write-Host "  [完了] $($file.FullName)" -ForegroundColor Green
-        }
-
-        $processedFiles++
-
-    } catch {
-        Write-Host "  [エラー] $($file.FullName): $_" -ForegroundColor Red
-    }
-}
-
-# 処理結果のサマリーを表示
-Write-Host ""
-Write-Host "==============================" -ForegroundColor Cyan
-Write-Host "処理が完了しました！" -ForegroundColor Cyan
-Write-Host "  スキャン済み: $totalFiles"
-Write-Host "  処理済み:     $processedFiles" -ForegroundColor Green
-Write-Host "  スキップ済み: $skippedFiles"   -ForegroundColor Gray
-if ($WhatIf) {
-    Write-Host "※ シミュレーションモードのため、ファイルは変更されていません" -ForegroundColor Yellow
-}
+Sub MergeSheetsAB()
+    Dim ws As Worksheet
+    Dim destWs As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim destNextRow As Long
+    Dim sheetName As String
+    Dim srcRange As Range
+    Dim cell As Range
+    Dim outputRow As Long
+    
+    ' 优化性能：关闭屏幕刷新和自动计算
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    
+    ' 1. 设置目标汇总表
+    On Error Resume Next
+    Set destWs = ThisWorkbook.Sheets("汇总")
+    On Error GoTo 0
+    
+    If destWs Is Nothing Then
+        Set destWs = ThisWorkbook.Sheets.Add(Before:=ThisWorkbook.Sheets(1))
+        destWs.Name = "汇总"
+    Else
+        destWs.Cells.Clear
+    End If
+    
+    ' 初始化目标表的起始行（假设没有标题行，直接从第1行开始写数据）
+    ' 如果需要标题行，可以在这里先写入标题，并将 destNextRow 设为 2
+    destNextRow = 1
+    
+    ' 2. 遍历所有工作表
+    For Each ws In ThisWorkbook.Worksheets
+        ' 跳过汇总表本身
+        If ws.Name <> destWs.Name Then
+            sheetName = ws.Name
+            
+            ' 获取当前Sheet A列和B列的最后一行
+            ' 使用A列来确定遍历范围，因为B列可能为空导致判断不准总行数
+            lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+            
+            ' 如果A列也没有数据，则跳过
+            If lastRow < 1 Then GoTo NextSheet
+            
+            ' 遍历每一行
+            For i = 1 To lastRow
+                ' 关键条件：B列不为空才合并
+                If Trim(ws.Cells(i, 2).Value) <> "" Then
+                    ' 在汇总表第一列写入Sheet名
+                    destWs.Cells(destNextRow, 1).Value = sheetName
+                    
+                    ' 在汇总表第二列写入原A列内容
+                    destWs.Cells(destNextRow, 2).Value = ws.Cells(i, 1).Value
+                    
+                    ' 在汇总表第三列写入原B列内容
+                    destWs.Cells(destNextRow, 3).Value = ws.Cells(i, 2).Value
+                    
+                    ' 目标行号+1
+                    destNextRow = destNextRow + 1
+                End If
+            Next i
+        End If
+NextSheet:
+    Next ws
+    
+    ' 恢复设置
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+    
+    MsgBox "合并完成！共处理了多个工作表的数据。", vbInformation, "提示"
+End Sub
