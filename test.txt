@@ -1,71 +1,228 @@
-Sub MergeSheetsAB()
-    Dim ws As Worksheet
-    Dim destWs As Worksheet
-    Dim lastRow As Long
-    Dim i As Long
-    Dim destNextRow As Long
-    Dim sheetName As String
-    Dim srcRange As Range
-    Dim cell As Range
-    Dim outputRow As Long
+Option Explicit
+
+' ==============================================================================
+' 高性能多关键字搜索工具 (基于 findstr)
+' ==============================================================================
+
+Sub HighPerformanceSearch()
+    Dim wsConfig As Worksheet
+    Dim wsResult As Worksheet
+    Dim searchPath As String
+    Dim keywords As Collection
+    Dim key As Variant
+    Dim resultRow As Long
+    Dim startTime As Double
     
-    ' 优化性能：关闭屏幕刷新和自动计算
-    Application.ScreenUpdating = False
-    Application.Calculation = xlCalculationManual
-    
-    ' 1. 设置目标汇总表
+    ' 1. 初始化设置
     On Error Resume Next
-    Set destWs = ThisWorkbook.Sheets("汇总")
+    Set wsConfig = ThisWorkbook.Sheets("Config")
+    Set wsResult = ThisWorkbook.Sheets("Result")
     On Error GoTo 0
     
-    If destWs Is Nothing Then
-        Set destWs = ThisWorkbook.Sheets.Add(Before:=ThisWorkbook.Sheets(1))
-        destWs.Name = "汇总"
-    Else
-        destWs.Cells.Clear
+    If wsConfig Is Nothing Or wsResult Is Nothing Then
+        MsgBox "错误：请确保工作簿中存在名为 'Config' 和 'Result' 的工作表。", vbCritical
+        Exit Sub
     End If
     
-    ' 初始化目标表的起始行（假设没有标题行，直接从第1行开始写数据）
-    ' 如果需要标题行，可以在这里先写入标题，并将 destNextRow 设为 2
-    destNextRow = 1
+    ' 获取搜索路径 (假设在 Config 表的 B1 单元格)
+    searchPath = wsConfig.Range("B1").Value
+    If Dir(searchPath, vbDirectory) = "" Then
+        MsgBox "错误：搜索路径无效或不存在：" & searchPath, vbCritical
+        Exit Sub
+    End If
     
-    ' 2. 遍历所有工作表
-    For Each ws In ThisWorkbook.Worksheets
-        ' 跳过汇总表本身
-        If ws.Name <> destWs.Name Then
-            sheetName = ws.Name
+    ' 获取关键词列表 (假设在 Config 表的 A 列，从 A2 开始)
+    Set keywords = GetKeywordsFromColumn(wsConfig, "A")
+    If keywords.Count = 0 Then
+        MsgBox "提示：未在 Config 表 A 列找到关键词。", vbExclamation
+        Exit Sub
+    End If
+    
+    ' 2. 准备结果表
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.StatusBar = "正在初始化..."
+    
+    wsResult.Cells.Clear
+    wsResult.Range("A1").Value = "关键词"
+    wsResult.Range("B1").Value = "文件完整路径"
+    wsResult.Range("C1").Value = "匹配行明细"
+    wsResult.Range("A1:C1").Font.Bold = True
+    wsResult.Range("A1:C1").Interior.Color = RGB(220, 230, 241)
+    
+    resultRow = 2
+    startTime = Timer
+    
+    ' 3. 循环每个关键词进行搜索
+    Dim i As Long
+    i = 0
+    For Each key In keywords
+        i = i + 1
+        Application.StatusBar = "正在搜索 (" & i & "/" & keywords.Count & "): " & key
+        
+        ' 调用 findstr 并获取结果集合
+        Dim matches As Collection
+        Set matches = ExecuteFindstr(CStr(key), searchPath)
+        
+        ' 解析并写入结果
+        Dim matchItem As Variant
+        For Each matchItem In matches
+            ' findstr 输出格式通常为: FilePath:LineNum:Content
+            ' 或者如果路径有空格可能表现不同，这里做稳健解析
+            Dim parts() As String
+            Dim filePath As String
+            Dim content As String
             
-            ' 获取当前Sheet A列和B列的最后一行
-            ' 使用A列来确定遍历范围，因为B列可能为空导致判断不准总行数
-            lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+            ' 简单分割策略：找到第一个冒号后的内容
+            ' 注意：Windows 路径如 C:\Path 包含冒号，findstr 输出通常是 C:\Path:Line:Content
+            ' 我们需要小心处理盘符冒号
             
-            ' 如果A列也没有数据，则跳过
-            If lastRow < 1 Then GoTo NextSheet
+            Dim firstColonPos As Long
+            Dim secondColonPos As Long
+            Dim tempStr As String
             
-            ' 遍历每一行
-            For i = 1 To lastRow
-                ' 关键条件：B列不为空才合并
-                If Trim(ws.Cells(i, 2).Value) <> "" Then
-                    ' 在汇总表第一列写入Sheet名
-                    destWs.Cells(destNextRow, 1).Value = sheetName
+            tempStr = CStr(matchItem)
+            
+            ' 查找第二个冒号的位置（跳过盘符后的第一个冒号）
+            ' 例如: D:\Code\File.cs:10:Some Code
+            ' 第一个冒号在 D: 后面，第二个在 File.cs 后面
+            
+            firstColonPos = InStr(1, tempStr, ":")
+            If firstColonPos > 0 Then
+                ' 从第一个冒号之后继续找第二个冒号
+                secondColonPos = InStr(firstColonPos + 1, tempStr, ":")
+                
+                If secondColonPos > 0 Then
+                    filePath = Left(tempStr, secondColonPos - 1)
+                    ' 剩余部分是 LineNum:Content，我们只需要 Content
+                    ' 再次分割去掉行号
+                    Dim restPart As String
+                    restPart = Mid(tempStr, secondColonPos + 1)
                     
-                    ' 在汇总表第二列写入原A列内容
-                    destWs.Cells(destNextRow, 2).Value = ws.Cells(i, 1).Value
+                    Dim lineNumEnd As Long
+                    lineNumEnd = InStr(1, restPart, ":")
+                    If lineNumEnd > 0 Then
+                        content = Mid(restPart, lineNumEnd + 1)
+                    Else
+                        content = restPart ' 容错：如果没有行号分隔符
+                    End If
                     
-                    ' 在汇总表第三列写入原B列内容
-                    destWs.Cells(destNextRow, 3).Value = ws.Cells(i, 2).Value
-                    
-                    ' 目标行号+1
-                    destNextRow = destNextRow + 1
+                    ' 写入 Excel
+                    wsResult.Cells(resultRow, 1).Value = key
+                    wsResult.Cells(resultRow, 2).Value = filePath
+                    wsResult.Cells(resultRow, 3).Value = content
+                    resultRow = resultRow + 1
                 End If
-            Next i
-        End If
-NextSheet:
-    Next ws
+            End If
+        Next matchItem
+    Next key
     
-    ' 恢复设置
-    Application.Calculation = xlCalculationAutomatic
+    ' 4. 完成清理
     Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.StatusBar = False
     
-    MsgBox "合并完成！共处理了多个工作表的数据。", vbInformation, "提示"
+    Dim endTime As Double
+    endTime = Timer
+    MsgBox "搜索完成！" & vbCrLf & _
+           "共找到 " & (resultRow - 2) & " 条匹配记录。" & vbCrLf & _
+           "耗时: " & Format(endTime - startTime, "0.00") & " 秒", vbInformation
+           
 End Sub
+
+' ==============================================================================
+' 辅助函数：执行 findstr 命令
+' ==============================================================================
+Function ExecuteFindstr(keyword As String, path As String) As Collection
+    Dim col As New Collection
+    Dim shell As Object
+    Dim exec As Object
+    Dim cmd As String
+    Dim output As String
+    Dim lines() As String
+    Dim line As Variant
+    
+    ' 构建 findstr 命令
+    ' /S : 递归子目录
+    ' /N : 显示行号
+    ' /I : 忽略大小写
+    ' /C : 将字符串作为文字搜索串（处理空格）
+    ' /P : 跳过非打印字符
+    
+    ' 限制文件类型以提高速度并避免二进制文件乱码
+    ' 可根据需要修改此处扩展名，例如只搜代码: "*.cs *.java *.py *.js *.ts *.xml *.json *.html *.css"
+    Dim fileFilter As String
+    fileFilter = "*.cs *.java *.cpp *.h *.hpp *.py *.js *.ts *.jsx *.tsx *.go *.rs *.php *.html *.css *.sql *.xml *.json *.yaml *.yml *.md *.txt *.vbs *.bas *.cls *.frm"
+    
+    ' 处理路径中的空格
+    Dim safePath As String
+    If InStr(path, " ") > 0 Then
+        safePath = """" & path & """"
+    Else
+        safePath = path
+    End If
+    
+    ' 处理关键词中的双引号（转义）
+    Dim safeKeyword As String
+    safeKeyword = Replace(keyword, """", "\""")
+    
+    ' 组合命令
+    cmd = "cmd /c findstr /S /N /I /C:""" & safeKeyword & """ " & safePath & "\" & fileFilter
+    
+    ' 执行命令
+    Set shell = CreateObject("WScript.Shell")
+    On Error Resume Next
+    Set exec = shell.Exec(cmd)
+    On Error GoTo 0
+    
+    If exec Is Nothing Then
+        Set ExecuteFindstr = col
+        Exit Function
+    End If
+    
+    ' 读取输出
+    output = exec.StdOut.ReadAll
+    
+    ' 如果结果为空，直接返回空集合
+    If Len(output) = 0 Then
+        Set ExecuteFindstr = col
+        Exit Function
+    End If
+    
+    ' 按行分割
+    lines = Split(output, vbCrLf)
+    
+    ' 存入集合
+    For Each line In lines
+        If Trim(line) <> "" Then
+            col.Add line
+        End If
+    Next line
+    
+    Set ExecuteFindstr = col
+End Function
+
+' ==============================================================================
+' 辅助函数：从指定列获取非空关键词
+' ==============================================================================
+Function GetKeywordsFromColumn(ws As Worksheet, colLetter As String) As Collection
+    Dim col As New Collection
+    Dim lastRow As Long
+    Dim i As Long
+    Dim val As String
+    
+    lastRow = ws.Cells(ws.Rows.Count, colLetter).End(xlUp).Row
+    If lastRow < 2 Then
+        Set GetKeywordsFromColumn = col
+        Exit Function
+    End If
+    
+    For i = 2 To lastRow
+        val = Trim(ws.Cells(i, colLetter).Value)
+        If val <> "" Then
+            col.Add val
+        End If
+    Next i
+    
+    Set GetKeywordsFromColumn = col
+End Function
