@@ -20,30 +20,27 @@ printf 'ファイル名,固定長or可変長,1行のレコードサイズ（Byte
 failed=0
 
 while IFS= read -r -d '' path; do
-    # odで各バイトを数値に変換し、NULを含むファイルも正しく計測する。
-    if result=$(od -An -v -tu1 -- "$path" | awk '
-        BEGIN { count = 0; size = 0; fixed = 1 }
-        function finish_record() {
-            count++
-            if (count == 1) first_size = size
-            else if (size != first_size) fixed = 0
-            size = 0
-        }
+    # LC_ALL=Cにより、length($0)で文字数ではなくバイト数を取得する。
+    # フィールド分割やバイトごとの処理を避け、レコード単位で比較する。
+    if result=$(awk '
+        BEGIN { fixed = 1 }
         {
-            for (i = 1; i <= NF; i++) {
-                if ($i == 10) finish_record()
-                else size++
+            size = length($0)
+            if (NR == 1) first_size = size
+            else if (size != first_size) {
+                # 可変長では行数不要のため、長さが異なる時点で検査を終了する。
+                fixed = 0
+                exit
             }
         }
         END {
-            # LFのない最終行も数える。末尾LFの後には空行を追加しない。
-            if (size > 0) finish_record()
+            # NRにはLFのない最終行も含まれる。末尾LFの後には空行を追加しない。
             # 単一行と空ファイルは判定保留とする。
-            if (count <= 1) printf "判定保留,,%.0f", count
-            else if (fixed) printf "固定長,%.0f,%.0f", first_size, count
+            if (NR <= 1) printf "判定保留,,%.0f", NR
+            else if (fixed) printf "固定長,%.0f,%.0f", first_size, NR
             else printf "可変長,,"
         }
-    '); then
+    ' "$path"); then
         relative=${path#"${root%/}/"}
         # CSVのファイル名は引用符で囲み、内部の引用符を二重化する。
         escaped=${relative//\"/\"\"}
